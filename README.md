@@ -16,10 +16,10 @@ If you use these models in your research, please cite:
 ```
 
 ## Models
-0. lenet-5 & lenet-300-100
+1. lenet-5 & lenet-300-100
   - see this repository
-0. bvlc_alexnet (focus on weight reduction)
+2. bvlc_alexnet (focus on weight reduction)
   - [bvlc_alexnet_18x_total.caffemodel] (https://goo.gl/LbG21j)
   - [bvlc_alexnet_20x_total.caffemodel] (https://goo.gl/dcrdC6)
-0. bvlc_alexnet (focus on conv reduction)
+3. bvlc_alexnet (focus on conv reduction)
   - [bvlc_alexnet_13_4x_conv.caffemodel] (https://goo.gl/yiXQ2Y)
