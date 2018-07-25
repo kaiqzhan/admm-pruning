@@ -1,0 +1,16 @@
+net: "models/bvlc_alexnet/train_val_admm.prototxt"
+test_iter: 1000
+test_interval: 1000
+base_lr: 0.001
+lr_policy: "admm"
+gamma: 0.1
+stepvalue: 10000
+admm_iter: 60000
+display: 20
+max_iter: 2400000
+momentum: 0.9
+weight_decay: 0.0005
+snapshot: 60000
+snapshot_prefix: "models/bvlc_alexnet/caffe_alexnet_train_admm"
+solver_mode: GPU
+pruning_phase: "admm"
