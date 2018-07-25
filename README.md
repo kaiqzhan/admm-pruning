@@ -24,7 +24,7 @@ If you use these models in your research, please cite:
   - [bvlc_alexnet_13_4x_conv.caffemodel] (http://bit.ly/2uNotPv)
 
 ## Results
-1. lenet-5 (top1 accuracy: 92%)
+1. lenet-5 (top1 accuracy: 99.2%)
 
 | Layer | Weights | Weights after prune | Weights after prune % |
 | ----- | ------- | ------------------- | --------------------- |
