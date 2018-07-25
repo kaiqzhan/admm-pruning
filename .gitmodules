@@ -1,0 +1,3 @@
+[submodule "caffe-admm"]
+	path = caffe-admm
+	url = https://github.com/KaiqiZhang/caffe-admm
