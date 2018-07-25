@@ -19,7 +19,7 @@ If you use these models in your research, please cite:
 1. lenet-5
   - see `tensorflow-mnist-model` in this repository
 2. bvlc_alexnet (focus on weight reduction)
-  - [bvlc_alexnet_21x_total.caffemodel] (http://bit.ly/2mIGUQU)
+  - [bvlc_alexnet_21x_total.caffemodel] (http://bit.ly/2JVwKFD)
 3. bvlc_alexnet (focus on conv reduction)
   - [bvlc_alexnet_13_4x_conv.caffemodel] (http://bit.ly/2uNotPv)
 
