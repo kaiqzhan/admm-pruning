@@ -45,11 +45,16 @@ def train(args, model, device, train_loader, optimizer, epoch, mask={}):
                 100. * batch_idx / len(train_loader), loss.item()))
 
 def project(W, p):
-    per = np.percentile(abs(W), p)
-    print("percentile {}".format(per))
-    mask = abs(W) < per
-    W[mask] = 0
-    return W, mask
+    Z = W.clone().detach()
+    Z = Z.view(-1)
+    p = int(p * Z.numel()) // 100
+    abs_Z = torch.abs(Z)
+    v, _ = torch.kthvalue(abs_Z, p)
+    mask = abs_Z <= v
+    Z[mask] = 0
+    Z = Z.view(W.shape)
+    mask = mask.view(W.shape)
+    return Z, mask
 
 def project_column(W, p):
     N = W.shape[0]
@@ -80,31 +85,29 @@ def project_filter(W, p):
 
 def admm_loss(model, aux):
     loss = 0
-    for weight_name, value in model.named_parameters():
+    for weight_name, W in model.named_parameters():
         if not weight_name in aux:
             continue
         Z, U = aux[weight_name]
-        loss += torch.norm(value - torch.tensor(Z - U, device=value.device)) ** 2
+        loss += F.mse_loss(W+U, Z, reduction='sum')
     return loss
 
-def update_aux(model, aux, prune_factor, iteration, rho=1e-2):
+def update_aux(model, aux, prune_factor, iteration):
     with torch.no_grad():
-        for weight_name, value in model.named_parameters():
+        for weight_name, W in model.named_parameters():
             if not weight_name in aux:
                 continue
             Z, U = aux[weight_name]
-            value = value.cpu().detach().numpy()
-            diff_old = value - Z
-            Z, _ = project(value + U, prune_factor[weight_name])
-            diff = value - Z
-            U += rho * diff
+            Z, _ = project(W + U, prune_factor[weight_name])
+            diff = W - Z
+            U += diff
             aux[weight_name] = (Z, U)
-            print('{}th iteration: {} gap {}'.format(iteration, weight_name, np.linalg.norm(diff)))
+            print('{}th iteration: {} gap {}'.format(iteration, weight_name, torch.norm(diff).item()))
 
-def train_admm(args, model, device, train_loader, optimizer, epoch, aux, prune_factor, rho=1e-4):
+def train_admm(args, model, device, train_loader, optimizer, epoch, aux, rho=1e-4):
     n = len(train_loader)
     k = len(str(n))
-    t = 'Train Epoch: {} [{:' + str(k+2) + '}/{} ({:.0f}%)]\tLoss: {:.6f}={:.6f}+{:.6f}\tGap: {:.6f}'
+    t = 'Train Epoch: {:3} [{:' + str(k+2) + '}/{} ({:.0f}%)]\tLoss: {:.6f}={:.6f}+{:.6f}\tGap: {:.6f}'
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -118,12 +121,12 @@ def train_admm(args, model, device, train_loader, optimizer, epoch, aux, prune_f
         if (batch_idx+1) % args.log_interval == 0:
             with torch.no_grad():
                 diff = 0
-                for weight_name, value in model.named_parameters():
+                for weight_name, W in model.named_parameters():
                     if not weight_name in aux:
                         continue
                     Z, _ = aux[weight_name]
-                    d = (value.detach().cpu().numpy() - Z).reshape(-1)
-                    diff += np.inner(d, d)
+                    d = (W - Z).view(-1)
+                    diff += torch.dot(d, d).item()
             print(t.format(
                 epoch, (batch_idx+1) * len(data), len(train_loader.dataset),
                 100. * (batch_idx+1) / len(train_loader), loss.item(), loss1.item(), loss2.item(), diff))
@@ -194,16 +197,14 @@ def main():
 
 
     model = Net().to(device)
-    #optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    optimizer = optim.Adam(model.parameters(), weight_decay=5e-5)
+    optimizer = optim.Adam(model.parameters(), weight_decay=5e-5, amsgrad=True)
 
-    #for epoch in range(1, args.epochs + 1):
-    #    train(args, model, device, train_loader, optimizer, epoch)
-    #    test(args, model, device, test_loader)
+    for epoch in range(1, args.epochs + 1):
+        train(args, model, device, train_loader, optimizer, epoch)
+        test(args, model, device, test_loader)
 
+    torch.save(model.state_dict(),"mnist_cnn.pt")
     model.load_state_dict(torch.load("mnist_cnn.pt"))
-
-    #test(args, model, device, test_loader)
 
     p_array = [80, 92, 99.1, 93]
     aux = {}
@@ -212,31 +213,34 @@ def main():
         if not weight_name.endswith('weight'):
             continue
         prune_factor[weight_name] = p_array[len(prune_factor)]
-        value = value.cpu().detach().numpy()
         aux[weight_name] = (project(value, prune_factor[weight_name])[0],
-                np.zeros_like(value))
+                torch.zeros_like(value, requires_grad=False))
 
-    #j = 10
-    #for i in range(30):
-    #    for epoch in range(i*j, (i+1)*j):
-    #        train_admm(args, model, device, train_loader, optimizer, epoch+1, aux, prune_factor)
-    #    test(args, model, device, test_loader)
-    #    update_aux(model, aux, prune_factor, i+1, 1)
+    j = 15
+    k = 30
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=5e-5, amsgrad=True)
+    for i in range(k):
+        for epoch in range(i*j, (i+1)*j):
+            train_admm(args, model, device, train_loader, optimizer, epoch+1, aux)
+        test(args, model, device, test_loader)
+        update_aux(model, aux, prune_factor, i+1)
+        for weight_name, (Z, U) in aux.items():
+            print('{} U norm {:.6f}'.format(weight_name, torch.norm(U).item()))
 
-    #torch.save(model.state_dict(),"mnist_cnn_admm.pt")
+    torch.save(model.state_dict(),"mnist_cnn_admm.pt")
 
     model.load_state_dict(torch.load("mnist_cnn_admm.pt"))
 
     # prepare mask
     with torch.no_grad():
         mask = {}
-        for weight_name, value in model.named_parameters():
+        for weight_name, W in model.named_parameters():
             if not weight_name in prune_factor:
                 continue
-            _, mask[weight_name] = project(value.detach().cpu().numpy(), prune_factor[weight_name])
-            mask[weight_name] = torch.tensor(mask[weight_name], device=device)
-            value[mask[weight_name]] = 0
+            _, mask[weight_name] = project(W, prune_factor[weight_name])
+            W[mask[weight_name]] = 0
 
+    optimizer = optim.Adam(model.parameters(), weight_decay=5e-5, amsgrad=True)
     for weight_name, value in model.named_parameters():
         if not weight_name in prune_factor:
             continue
