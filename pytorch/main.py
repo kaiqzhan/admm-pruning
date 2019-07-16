@@ -34,8 +34,7 @@ def train(args, model, device, train_loader, optimizer, epoch, mask={}):
         output = model(data)
         loss = F.nll_loss(output, target)
         loss.backward()
-        for weight_name, m in mask:
-            W = model.state_dict(keep_vars=True)[weight_name]
+        for weight_name, (W, m) in mask:
             W.grad[m] = 0
         optimizer.step()
         if batch_idx % args.log_interval == 0:
@@ -84,25 +83,23 @@ def project_filter(W, p):
 
 def admm_loss(model, aux):
     loss = 0
-    for weight_name, (Z, U, _) in aux.items():
-        W = model.state_dict(keep_vars=True)[weight_name]
+    for weight_name, (W, Z, U, _) in aux.items():
         loss += F.mse_loss(W+U, Z, reduction='sum')
     return loss
 
 def update_aux(model, aux, iteration):
     with torch.no_grad():
-        for weight_name, (Z, U, p) in aux.items():
-            W = model.state_dict(keep_vars=True)[weight_name]
+        for weight_name, (W, Z, U, p) in aux.items():
             Z, _ = project(W + U, p)
             diff = W - Z
             U += diff
-            aux[weight_name] = (Z, U, p)
+            aux[weight_name] = (W, Z, U, p)
             print('{}th iteration: {} gap {}'.format(iteration, weight_name, torch.norm(diff).item()))
 
 def train_admm(args, model, device, train_loader, optimizer, epoch, aux, rho=1e-4):
     n = len(train_loader)
     k = len(str(n))
-    t = 'Train Epoch: {:3} [{:' + str(k+2) + '}/{} ({:.0f}%)]\tLoss: {:.6f}={:.6f}+{:.6f}\tGap: {:.6f}'
+    t = 'Train Epoch: {:3} [{:' + str(k+2) + '}/{} ({:.0f}%)]\tLoss: {:.6f}={:.6f}+{:.6f}'
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -114,15 +111,9 @@ def train_admm(args, model, device, train_loader, optimizer, epoch, aux, rho=1e-
         loss.backward()
         optimizer.step()
         if (batch_idx+1) % args.log_interval == 0:
-            with torch.no_grad():
-                diff = 0
-                for weight_name, (Z, _, _) in aux.items():
-                    W = model.state_dict(keep_vars=True)[weight_name]
-                    d = (W - Z).view(-1)
-                    diff += torch.dot(d, d).item()
             print(t.format(
                 epoch, (batch_idx+1) * len(data), len(train_loader.dataset),
-                100. * (batch_idx+1) / len(train_loader), loss.item(), loss1.item(), loss2.item(), diff))
+                100. * (batch_idx+1) / len(train_loader), loss.item(), loss1.item(), loss2.item()))
 
 def test(args, model, device, test_loader):
     model.eval()
@@ -201,17 +192,18 @@ def main():
 
     p_array = [80, 92, 99.1, 93]
     '''
-    map from weight name to tuple (Z, U, prune_factor)
+    map from weight name to tuple (W, Z, U, prune_factor)
     '''
     aux = {}
-    for weight_name, value in model.named_parameters():
+    for weight_name, W in model.named_parameters():
         if not weight_name.endswith('weight'):
             continue
         p = p_array[len(aux)]
         aux[weight_name] = (
-                project(value, p)[0],                         # Z
-                torch.zeros_like(value, requires_grad=False), # U
-                p,                                            # prune factor
+                W,                                        # W
+                project(W, p)[0],                         # Z
+                torch.zeros_like(W, requires_grad=False), # U
+                p,                                        # prune factor
                 )
 
     j = 5
@@ -222,7 +214,7 @@ def main():
             train_admm(args, model, device, train_loader, optimizer, epoch+1, aux)
         test(args, model, device, test_loader)
         update_aux(model, aux, i+1)
-        for weight_name, (_, U, _) in aux.items():
+        for weight_name, (W, _, U, _) in aux.items():
             print('{} U norm {:.6f}'.format(weight_name, torch.norm(U).item()))
 
     torch.save(model.state_dict(),"mnist_cnn_admm.pt")
@@ -231,14 +223,12 @@ def main():
     # prepare mask
     with torch.no_grad():
         mask = {}
-        for weight_name, (_, _, p) in aux.items():
-            W = model.state_dict(keep_vars=True)[weight_name]
-            _, mask[weight_name] = project(W, p)
+        for weight_name, (W, _, _, p) in aux.items():
+            _, mask[weight_name] = (W, project(W, p))
             W[mask[weight_name]] = 0
 
     optimizer = optim.Adam(model.parameters(), weight_decay=5e-5, amsgrad=True)
-    for weight_name in mask:
-        W = model.state_dict()[weight_name]
+    for weight_name, (W, _) in mask.items():
         c = (W != 0).sum()
         print('{}: {}/{} ({:.2f}%) non-zero values'.format(weight_name, c, W.numel(), 100.*float(c)/W.numel()))
 
@@ -246,8 +236,7 @@ def main():
         train(args, model, device, train_loader, optimizer, epoch, mask)
         test(args, model, device, test_loader)
 
-    for weight_name in mask:
-        W = model.state_dict()[weight_name]
+    for weight_name, (W, _) in mask.items():
         c = (W != 0).sum()
         print('{}: {}/{} ({:.2f}%) non-zero values'.format(weight_name, c, W.numel(), 100.*float(c)/W.numel()))
 
