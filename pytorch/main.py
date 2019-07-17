@@ -34,7 +34,7 @@ def train(args, model, device, train_loader, optimizer, epoch, mask={}):
         output = model(data)
         loss = F.nll_loss(output, target)
         loss.backward()
-        for weight_name, (W, m) in mask:
+        for weight_name, (W, m) in mask.items():
             W.grad[m] = 0
         optimizer.step()
         if batch_idx % args.log_interval == 0:
@@ -190,7 +190,8 @@ def main():
     #torch.save(model.state_dict(),"mnist_cnn.pt")
     model.load_state_dict(torch.load("mnist_cnn.pt"))
 
-    p_array = [80, 92, 99.1, 93]
+    #p_array = [80, 92, 99.1, 93]
+    p_array = [50, 50, 50, 93]
     '''
     map from weight name to tuple (W, Z, U, prune_factor)
     '''
@@ -217,15 +218,16 @@ def main():
         for weight_name, (W, _, U, _) in aux.items():
             print('{} U norm {:.6f}'.format(weight_name, torch.norm(U).item()))
 
-    torch.save(model.state_dict(),"mnist_cnn_admm.pt")
+    #torch.save(model.state_dict(),"mnist_cnn_admm.pt")
     model.load_state_dict(torch.load("mnist_cnn_admm.pt"))
 
     # prepare mask
     with torch.no_grad():
         mask = {}
         for weight_name, (W, _, _, p) in aux.items():
-            _, mask[weight_name] = (W, project(W, p))
-            W[mask[weight_name]] = 0
+            _, m = project(W, p)
+            W[m] = 0
+            mask[weight_name] = (W, m)
 
     optimizer = optim.Adam(model.parameters(), weight_decay=5e-5, amsgrad=True)
     for weight_name, (W, _) in mask.items():
