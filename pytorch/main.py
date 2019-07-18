@@ -25,6 +25,31 @@ class Net(nn.Module):
         x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
+    def forward_all(self, x):
+        res = dict()
+        res['conv1'] = F.relu(self.conv1(x))
+        res['pool1'] = F.max_pool2d(res['conv1'], 2, 2)
+        res['conv2'] = F.relu(self.conv2(res['pool1']))
+        res['pool2'] = F.max_pool2d(res['conv2'], 2, 2)
+        x = res['pool2'].view(-1, 4*4*50)
+        res['fc1'] = F.relu(self.fc1(x))
+        res['fc2'] = self.fc2(res['fc1'])
+        res['pred'] = F.log_softmax(res['fc2'], dim=1)
+        return res
+
+    def prune(self, x):
+        y = self.forward_all(x)
+        order = ['conv1', 'conv2', 'fc1', 'fc2']
+        full_order = ['conv1', 'pool1', 'conv2', 'pool2', 'fc1', 'fc2']
+        for weight_name, W in self.named_parameters():
+            if not weight_name.endswith('.weight'):
+                continue
+            name = weight_name[:-7] # remove .weight
+            i = [i for i, s in enumerate(order) if name == s][0]
+            mask = torch.norm(W.view(W.shape[0], -1), dim=1) == 0
+            l_y = y[name]
+            print(name, l_y[:, mask].detach().cpu().numpy(), l_y.shape)
+
 def train(args, model, device, train_loader, optimizer, epoch, mask={}):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
@@ -180,7 +205,7 @@ def main():
 
 
     model = Net().to(device)
-    #optimizer = optim.Adam(model.parameters(), lr=args.LR, weight_decay=5e-5, amsgrad=True)
+    #optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=5e-5, amsgrad=True)
 
     #for epoch in range(1, args.epochs + 1):
     #    train(args, model, device, train_loader, optimizer, epoch)
@@ -208,16 +233,16 @@ def main():
                 project_fun,                              # project_fun
                 )
 
-    j = 5
-    k = 30
-    optimizer = optim.Adam(model.parameters(), lr=args.LR, weight_decay=5e-5, amsgrad=True)
-    for i in range(k):
-        for epoch in range(i*j, (i+1)*j):
-            train_admm(args, model, device, train_loader, optimizer, epoch+1, aux)
-        test(args, model, device, test_loader)
-        update_aux(model, aux, i+1)
-        for weight_name, (W, _, U, _) in aux.items():
-            print('{} U norm {:.6f}'.format(weight_name, torch.norm(U).item()))
+    #j = 5
+    #k = 30
+    #optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=5e-5, amsgrad=True)
+    #for i in range(k):
+    #    for epoch in range(i*j, (i+1)*j):
+    #        train_admm(args, model, device, train_loader, optimizer, epoch+1, aux)
+    #    test(args, model, device, test_loader)
+    #    update_aux(model, aux, i+1)
+    #    for weight_name, (W, _, U, _) in aux.items():
+    #        print('{} U norm {:.6f}'.format(weight_name, torch.norm(U).item()))
 
     #torch.save(model.state_dict(),"mnist_cnn_admm.pt")
     model.load_state_dict(torch.load("mnist_cnn_admm.pt"))
@@ -230,14 +255,21 @@ def main():
             W[m] = 0
             mask[weight_name] = (W, m)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.LR, weight_decay=5e-5, amsgrad=True)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=5e-5, amsgrad=True)
     for weight_name, (W, _) in mask.items():
         c = (W != 0).sum()
         print('{}: {}/{} ({:.2f}%) non-zero values'.format(weight_name, c, W.numel(), 100.*float(c)/W.numel()))
 
-    for epoch in range(1, args.epochs + 1):
-        train(args, model, device, train_loader, optimizer, epoch, mask)
-        test(args, model, device, test_loader)
+    #for epoch in range(1, args.epochs + 1):
+    #    train(args, model, device, train_loader, optimizer, epoch, mask)
+    #    test(args, model, device, test_loader)
+
+    #torch.save(model.state_dict(), "mnist_cnn_admm_tuned.pt")
+    model.load_state_dict(torch.load("mnist_cnn_admm_tuned.pt"))
+
+    x, _ = next(iter(train_loader))
+    x = x.to(device)
+    model.prune(x)
 
     for weight_name, (W, _) in mask.items():
         c = (W != 0).sum()
