@@ -1,12 +1,11 @@
 from __future__ import print_function
 import argparse
+from functools import partial
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
-import numpy as np
-
 
 class Net(nn.Module):
     def __init__(self):
@@ -61,7 +60,7 @@ def project_column(W, p):
     nz = torch.norm(Z, dim=0)
     p = int(p * nz.numel()) // 100
     v, _ = torch.kthvalue(nz, p)
-    mask = (nz < v).view(1, -1).repeat(N, 1)
+    mask = (nz <= v).view(1, -1).repeat(N, 1)
     Z[mask] = 0
     Z = Z.view(W.shape)
     mask = mask.view(W.shape)
@@ -75,7 +74,7 @@ def project_filter(W, p):
     nz = torch.norm(Z, dim=1)
     p = int(p * nz.numel()) // 100
     v, _ = torch.kthvalue(nz, p)
-    mask = (nz < v).view(-1, 1).repeat(1, M)
+    mask = (nz <= v).view(-1, 1).repeat(1, M)
     Z[mask] = 0
     Z = Z.view(W.shape)
     mask = mask.view(W.shape)
@@ -89,11 +88,11 @@ def admm_loss(model, aux):
 
 def update_aux(model, aux, iteration):
     with torch.no_grad():
-        for weight_name, (W, Z, U, p) in aux.items():
-            Z, _ = project(W + U, p)
+        for weight_name, (W, Z, U, project_fun) in aux.items():
+            Z, _ = project_fun(W + U)
             diff = W - Z
             U += diff
-            aux[weight_name] = (W, Z, U, p)
+            aux[weight_name] = (W, Z, U, project_fun)
             print('{}th iteration: {} gap {}'.format(iteration, weight_name, torch.norm(diff).item()))
 
 def train_admm(args, model, device, train_loader, optimizer, epoch, aux, rho=1e-4):
@@ -142,7 +141,7 @@ def main():
                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N',
                         help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+    parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
                         help='learning rate (default: 0.01)')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='SGD momentum (default: 0.5)')
@@ -164,7 +163,7 @@ def main():
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
+    kwargs = {'num_workers': 7, 'pin_memory': True} if use_cuda else {}
     train_loader = torch.utils.data.DataLoader(
         datasets.MNIST('../data', train=True, download=True,
                        transform=transforms.Compose([
@@ -181,7 +180,7 @@ def main():
 
 
     model = Net().to(device)
-    #optimizer = optim.Adam(model.parameters(), weight_decay=5e-5, amsgrad=True)
+    #optimizer = optim.Adam(model.parameters(), lr=args.LR, weight_decay=5e-5, amsgrad=True)
 
     #for epoch in range(1, args.epochs + 1):
     #    train(args, model, device, train_loader, optimizer, epoch)
@@ -191,25 +190,27 @@ def main():
     model.load_state_dict(torch.load("mnist_cnn.pt"))
 
     #p_array = [80, 92, 99.1, 93]
-    p_array = [50, 50, 50, 93]
+    p_array = [40, 60, 95]
     '''
-    map from weight name to tuple (W, Z, U, prune_factor)
+    map from weight name to tuple (W, Z, U, project_fun)
     '''
     aux = {}
     for weight_name, W in model.named_parameters():
         if not weight_name.endswith('weight'):
             continue
-        p = p_array[len(aux)]
+        if weight_name == 'fc2.weight':
+            continue
+        project_fun = partial(project_filter, p=p_array[len(aux)])
         aux[weight_name] = (
                 W,                                        # W
-                project(W, p)[0],                         # Z
+                project_fun(W)[0],                        # Z
                 torch.zeros_like(W, requires_grad=False), # U
-                p,                                        # prune factor
+                project_fun,                              # project_fun
                 )
 
     j = 5
     k = 30
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=5e-5, amsgrad=True)
+    optimizer = optim.Adam(model.parameters(), lr=args.LR, weight_decay=5e-5, amsgrad=True)
     for i in range(k):
         for epoch in range(i*j, (i+1)*j):
             train_admm(args, model, device, train_loader, optimizer, epoch+1, aux)
@@ -224,12 +225,12 @@ def main():
     # prepare mask
     with torch.no_grad():
         mask = {}
-        for weight_name, (W, _, _, p) in aux.items():
-            _, m = project(W, p)
+        for weight_name, (W, _, _, project_fun) in aux.items():
+            _, m = project_fun(W)
             W[m] = 0
             mask[weight_name] = (W, m)
 
-    optimizer = optim.Adam(model.parameters(), weight_decay=5e-5, amsgrad=True)
+    optimizer = optim.Adam(model.parameters(), lr=args.LR, weight_decay=5e-5, amsgrad=True)
     for weight_name, (W, _) in mask.items():
         c = (W != 0).sum()
         print('{}: {}/{} ({:.2f}%) non-zero values'.format(weight_name, c, W.numel(), 100.*float(c)/W.numel()))
