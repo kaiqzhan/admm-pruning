@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
+from pathlib import Path
 
 class Net(nn.Module):
     def __init__(self):
@@ -48,11 +49,13 @@ class Net(nn.Module):
             i = [i for i, s in enumerate(order) if name == s][0]
             mask = torch.norm(W.view(W.shape[0], -1), dim=1) == 0
             l_y = y[name]
-            print(name, l_y[:, mask].detach().cpu().numpy(), l_y.shape)
+            #print(name, l_y[:, mask].detach().cpu().numpy(), l_y.shape)
 
 def train(args, model, device, train_loader, optimizer, epoch, mask={}):
     model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
+    bs = train_loader.batch_size
+    n = len(train_loader.dataset)
+    for i, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
@@ -61,10 +64,8 @@ def train(args, model, device, train_loader, optimizer, epoch, mask={}):
         for weight_name, (W, m) in mask.items():
             W.grad[m] = 0
         optimizer.step()
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader), loss.item()))
+        if i % args.log_interval == 0:
+            print(f'Train Epoch: {epoch} [{i*bs:5d}/{n} ({100.*i*bs/n:.0f}%)]\tLoss: {loss.item():.6f}')
 
 def project(W, p):
     Z = W.clone().detach()
@@ -118,14 +119,13 @@ def update_aux(model, aux, iteration):
             diff = W - Z
             U += diff
             aux[weight_name] = (W, Z, U, project_fun)
-            print('{}th iteration: {} gap {}'.format(iteration, weight_name, torch.norm(diff).item()))
+            print(f'{iteration}th iteration: {weight_name} gap {torch.norm(diff).item()}')
 
 def train_admm(args, model, device, train_loader, optimizer, epoch, aux, rho=1e-4):
-    n = len(train_loader)
-    k = len(str(n))
-    t = 'Train Epoch: {:3} [{:' + str(k+2) + '}/{} ({:.0f}%)]\tLoss: {:.6f}={:.6f}+{:.6f}'
+    n = len(train_loader.dataset)
     model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
+    bs = train_loader.batch_size
+    for i, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
@@ -134,15 +134,15 @@ def train_admm(args, model, device, train_loader, optimizer, epoch, aux, rho=1e-
         loss = loss1 + loss2
         loss.backward()
         optimizer.step()
-        if (batch_idx+1) % args.log_interval == 0:
-            print(t.format(
-                epoch, (batch_idx+1) * len(data), len(train_loader.dataset),
-                100. * (batch_idx+1) / len(train_loader), loss.item(), loss1.item(), loss2.item()))
+        if (i+1) % args.log_interval == 0:
+            print(f'Train Epoch: {epoch:3} [{(i+1)*bs:5d}/{n} ({100.*(i+1)*bs/n:.0f}%)]\
+                    \tLoss: {loss.item():.6f}={loss1.item():.6f}+{loss2.item():.6f}')
 
 def test(args, model, device, test_loader):
     model.eval()
     test_loss = 0
     correct = 0
+    n = len(test_loader.dataset)
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
@@ -151,11 +151,14 @@ def test(args, model, device, test_loader):
             pred = output.argmax(dim=1, keepdim=True) # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
 
-    test_loss /= len(test_loader.dataset)
+    test_loss /= n
 
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
+    print(f'\nTest set: Average loss: {test_loss:.4f}, Accuracy: {correct}/{n} ({100.*correct/n:.0f}%)\n')
+
+def log_model(model, filename):
+    if not Path(filename).is_file():
+        torch.save(model.state_dict(), filename)
+    model.load_state_dict(torch.load(filename))
 
 def main():
     # Training settings
@@ -211,8 +214,7 @@ def main():
     #    train(args, model, device, train_loader, optimizer, epoch)
     #    test(args, model, device, test_loader)
 
-    #torch.save(model.state_dict(),"mnist_cnn.pt")
-    model.load_state_dict(torch.load("mnist_cnn.pt"))
+    log_model(model, 'mnist_cnn.pt')
 
     #p_array = [80, 92, 99.1, 93]
     p_array = [40, 60, 95]
@@ -242,10 +244,9 @@ def main():
     #    test(args, model, device, test_loader)
     #    update_aux(model, aux, i+1)
     #    for weight_name, (W, _, U, _) in aux.items():
-    #        print('{} U norm {:.6f}'.format(weight_name, torch.norm(U).item()))
+    #        print(f'{weight_name} U norm {torch.norm(U).item():.6f}')
 
-    #torch.save(model.state_dict(),"mnist_cnn_admm.pt")
-    model.load_state_dict(torch.load("mnist_cnn_admm.pt"))
+    log_model(model, 'mnist_cnn_admm.pt')
 
     # prepare mask
     with torch.no_grad():
@@ -258,14 +259,13 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=5e-5, amsgrad=True)
     for weight_name, (W, _) in mask.items():
         c = (W != 0).sum()
-        print('{}: {}/{} ({:.2f}%) non-zero values'.format(weight_name, c, W.numel(), 100.*float(c)/W.numel()))
+        print(f'{weight_name}: {c}/{W.numel()} ({100.*float(c)/W.numel():.2f}%) non-zero values')
 
-    #for epoch in range(1, args.epochs + 1):
-    #    train(args, model, device, train_loader, optimizer, epoch, mask)
-    #    test(args, model, device, test_loader)
+    for epoch in range(1, args.epochs + 1):
+        train(args, model, device, train_loader, optimizer, epoch, mask)
+        test(args, model, device, test_loader)
 
-    #torch.save(model.state_dict(), "mnist_cnn_admm_tuned.pt")
-    model.load_state_dict(torch.load("mnist_cnn_admm_tuned.pt"))
+    log_model(model, "mnist_cnn_admm_tuned.pt")
 
     x, _ = next(iter(train_loader))
     x = x.to(device)
@@ -273,7 +273,7 @@ def main():
 
     for weight_name, (W, _) in mask.items():
         c = (W != 0).sum()
-        print('{}: {}/{} ({:.2f}%) non-zero values'.format(weight_name, c, W.numel(), 100.*float(c)/W.numel()))
+        print(f'{weight_name}: {c}/{W.numel()} ({100.*float(c)/W.numel():.2f}%) non-zero values')
 
 
 if __name__ == '__main__':
