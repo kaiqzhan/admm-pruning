@@ -10,6 +10,7 @@ from net import Net
 from options import options
 from data import loaders
 from admm_utils import init_aux, init_mask, admm_loss, update_aux
+from utils import Tensorboard
 
 def train(model,
         train_loader,
@@ -24,6 +25,9 @@ def train(model,
     model.train()
     bs = train_loader.batch_size
     n = len(train_loader.dataset)
+    main_loss_sum = 0
+    admm_loss_sum = 0
+    loss_sum = 0
     for i, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
@@ -33,6 +37,10 @@ def train(model,
         loss1 = F.nll_loss(output, target)
         loss2 = torch.Tensor([0])[0] if aux is None else rho * admm_loss(aux)
         loss = loss1 + loss2
+
+        main_loss_sum += loss1.item()
+        admm_loss_sum += loss2.item()
+        loss_sum += loss.item()
 
         loss.backward()
         for weight_name, (W, m) in mask.items(): # used for finetuning
@@ -46,6 +54,9 @@ def train(model,
     j = i+1
     print(f'Train Epoch: {epoch:3} [{n:5d}/{n} ({100.*j*bs/n:.0f}%)]\
             \tLoss: {loss.item():.6f}={loss1.item():.6f}+{loss2.item():.6f}')
+
+    n = len(train_loader)
+    return main_loss_sum / n, admm_loss_sum / n, loss_sum / n
 
 
 def test(model, test_loader, device):
@@ -67,6 +78,7 @@ def test(model, test_loader, device):
 
 def log_model(model, filename):
     filepath = Path('models')/filename
+    filepath.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), str(filepath))
 
 def print_weight_statistics(mask):
@@ -80,6 +92,8 @@ def main():
     options(parser)
     args = parser.parse_args()
 
+    tb = Tensorboard('log')
+
     torch.manual_seed(args.seed)
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
@@ -91,7 +105,8 @@ def main():
 
     # initial training
     for epoch in range(args.epochs):
-        train(model, train_loader, optimizer, device, epoch+1)
+        main_loss, _, _ = train(model, train_loader, optimizer, device, epoch+1)
+        tb.log_scalar('initial_training/loss', main_loss, epoch)
         test(model, test_loader, device)
 
     log_model(model, 'mnist_cnn.pth')
@@ -104,11 +119,17 @@ def main():
     k = 30
     for i in range(k):
         for epoch in range(i*j, (i+1)*j):
-            train(model, train_loader, optimizer, device, epoch+1, aux=aux, log_interval=int(1e6))
+            main_loss, admm_loss, loss = train(model, train_loader,
+                    optimizer, device, epoch+1, aux=aux, log_interval=int(1e6))
+            tb.log_scalar('pruning/loss', loss, epoch)
+            tb.log_scalar('pruning/main_loss', main_loss, epoch)
+            tb.log_scalar('pruning/admm_loss', admm_loss, epoch)
         test(model, test_loader, device)
         update_aux(aux, i+1)
         for weight_name, (W, _, U, _) in aux.items():
-            print(f'{weight_name} U norm {torch.norm(U).item():.6f}')
+            u_norm = torch.norm(U).item()
+            print(f'{weight_name} U norm {u_norm:.6f}')
+            tb.log_scalar(f'pruning/{weight_name}_u_norm', u_norm, (i+1)*j)
 
     log_model(model, 'mnist_cnn_admm.pth')
 
@@ -119,8 +140,9 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=5e-5, amsgrad=True)
     print_weight_statistics(mask)
 
-    for epoch in range(1, args.epochs + 1):
-        train(model, train_loader, optimizer, device, epoch, mask=mask)
+    for epoch in range(args.epochs):
+        main_loss, _, _ = train(model, train_loader, optimizer, device, epoch+1, mask=mask)
+        tb.log_scalar('fine-tuning/loss', main_loss, epoch)
         test(model, test_loader, device)
 
     log_model(model, "mnist_cnn_admm_tuned.pth")
