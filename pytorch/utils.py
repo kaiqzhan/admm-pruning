@@ -4,12 +4,12 @@
 import io
 import numpy as np
 from PIL import Image
-import tensorflow as tf
+from torch.utils.tensorboard import SummaryWriter
 import atexit
 
 class Tensorboard:
     def __init__(self, logdir):
-        self.writer = tf.summary.FileWriter(logdir)
+        self.writer = SummaryWriter(logdir)
         atexit.register(self.close)
 
     def close(self):
@@ -19,9 +19,7 @@ class Tensorboard:
 
     def log_scalar(self, tag, value, global_step):
         assert self.writer, "Writer is closed!"
-        summary = tf.Summary()
-        summary.value.add(tag=tag, simple_value=value)
-        self.writer.add_summary(summary, global_step=global_step)
+        self.writer.add_scalar(tag, value, global_step=global_step)
         self.writer.flush()
 
     def log_histogram(self, tag, values, global_step, bins):

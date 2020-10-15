@@ -115,9 +115,10 @@ def main():
     p_array = [40, 60, 95]
     aux = init_aux(model, p_array)
 
-    j = 5
-    k = 30
+    j = 10
+    k = 100
     for i in range(k):
+        prev_aux = {k: (W.detach().clone(), Z.detach().clone()) for k, (W, Z, _, _) in aux.items()}
         for epoch in range(i*j, (i+1)*j):
             main_loss, admm_loss, loss = train(model, train_loader,
                     optimizer, device, epoch+1, aux=aux, log_interval=int(1e6))
@@ -126,10 +127,16 @@ def main():
             tb.log_scalar('pruning/admm_loss', admm_loss, epoch)
         test(model, test_loader, device)
         update_aux(aux, i+1)
-        for weight_name, (W, _, U, _) in aux.items():
-            u_norm = torch.norm(U).item()
-            print(f'{weight_name} U norm {u_norm:.6f}')
-            tb.log_scalar(f'pruning/{weight_name}_u_norm', u_norm, (i+1)*j)
+        for weight_name, (W, Z, _, _) in aux.items():
+            diff = W - Z
+            gap = torch.norm(diff).item()
+            gap_inf = torch.norm(diff, p=float('inf'))
+            tb.log_scalar(f'pruning/{weight_name}/gap', gap, (i+1)*j)
+            tb.log_scalar(f'pruning/{weight_name}/gap_max', gap_inf, (i+1)*j)
+            tb.log_scalar(f'pruning/{weight_name}/Z_change', torch.norm(Z - prev_aux[weight_name][1]), (i+1)*j)
+            tb.log_scalar(f'pruning/{weight_name}/Z_change_max', torch.norm(Z - prev_aux[weight_name][1], p=float('inf')), (i+1)*j)
+            tb.log_scalar(f'pruning/{weight_name}/W_change', torch.norm(W - prev_aux[weight_name][0]), (i+1)*j)
+            tb.log_scalar(f'pruning/{weight_name}/W_change_max', torch.norm(W - prev_aux[weight_name][0], p=float('inf')), (i+1)*j)
 
     log_model(model, 'mnist_cnn_admm.pth')
 
