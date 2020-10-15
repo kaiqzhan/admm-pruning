@@ -133,7 +133,10 @@ def main(_):
                 train_accuracy = accuracy.eval(feed_dict={
                     x: batch[0], y_: batch[1], keep_prob: 1.0})
                 print('step %d, training accuracy %g' % (i, train_accuracy))
-            train_step1.run(feed_dict={x: batch[0], y_: batch[1], keep_prob: 1.0, A:Z1, B:U1, C:Z2, D:U2, E:Z3, F:U3, G:Z4, H:U4})
+            #train_step1.run(feed_dict={x: batch[0], y_: batch[1], keep_prob: 1.0, A:Z1, B:U1, C:Z2, D:U2, E:Z3, F:U3, G:Z4, H:U4})
+            _, train_loss, admm_loss = sess.run((train_step1, solver.train_loss, solver.admm_loss), feed_dict={x: batch[0], y_: batch[1], keep_prob: 1.0, A:Z1, B:U1, C:Z2, D:U2, E:Z3, F:U3, G:Z4, H:U4})
+            if (i+1) % 100 == 0:
+                print('step {:d}, training loss: {:.6f}, admm_loss: {:.6f}'.format(i+1, train_loss, admm_loss))
         Z1 = sess.run(W_conv1) + U1
         Z1 = projection(Z1, percent=P1)
 
@@ -160,6 +163,12 @@ def main(_):
         print(LA.norm(sess.run(W_conv2) - Z2))
         print(LA.norm(sess.run(W_fc1) - Z3))
         print(LA.norm(sess.run(W_fc2) - Z4))
+
+        print('-------------------')
+        print(LA.norm(U1))
+        print(LA.norm(U2))
+        print(LA.norm(U3))
+        print(LA.norm(U4))
 
     dense_w['conv1/W_conv1'] = W_conv1
     dense_w['conv2/W_conv2'] = W_conv2

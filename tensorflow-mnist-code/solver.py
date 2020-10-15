@@ -19,10 +19,14 @@ class AdmmSolver():
     W_fc2 = model.W_fc2
     cross_entropy = model.cross_entropy
     with tf.name_scope('adam_optimizer'):
-        train_step = tf.train.AdamOptimizer(1e-3).minimize(cross_entropy+0.00005*(tf.nn.l2_loss(W_conv1)+tf.nn.l2_loss(W_conv2)+tf.nn.l2_loss(W_fc1)+tf.nn.l2_loss(W_fc2)))
-        train_step1 = tf.train.AdamOptimizer(1e-3).minimize(cross_entropy+0.00005*(tf.nn.l2_loss(W_conv1)+tf.nn.l2_loss(W_conv2)+tf.nn.l2_loss(W_fc1)+tf.nn.l2_loss(W_fc2))+0.0001*(tf.nn.l2_loss(W_conv1-A+B)+ tf.nn.l2_loss(W_conv2-C+D)+tf.nn.l2_loss(W_fc1-E+F)+tf.nn.l2_loss(W_fc2-G+H)))
+        train_loss = cross_entropy+0.00005*(tf.nn.l2_loss(W_conv1)+tf.nn.l2_loss(W_conv2)+tf.nn.l2_loss(W_fc1)+tf.nn.l2_loss(W_fc2))
+        admm_loss  = 0.0001*(tf.nn.l2_loss(W_conv1-A+B)+ tf.nn.l2_loss(W_conv2-C+D)+tf.nn.l2_loss(W_fc1-E+F)+tf.nn.l2_loss(W_fc2-G+H))
+        train_step = tf.train.AdamOptimizer(1e-3).minimize(train_loss)
+        train_step1 = tf.train.AdamOptimizer(1e-3).minimize(train_loss + admm_loss)
     self.train_step = train_step
     self.train_step1 = train_step1
+    self.train_loss = train_loss
+    self.admm_loss = admm_loss
 
 def create_admm_solver(model):
   return AdmmSolver(model)
